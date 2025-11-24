@@ -41,11 +41,11 @@ fun WidgetRenderer(
         is WidgetType.Streak -> {
             Card(
                 modifier = modifier
-                    .fillMaxWidth()
+                    .width(160.dp) // Smaller, almost square tile (not full width)
                     .padding(8.dp),
-                shape = RoundedCornerShape(20.dp), // Large rounded corners for wider rectangle
+                shape = RoundedCornerShape(20.dp), // Large rounded corners
                 colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFFF4F4F4) // Light grey background
+                    containerColor = StatisticsColors.CardBackground // Very dark grey/almost black
                 )
             ) {
                 StreakWidget(type)
@@ -208,55 +208,95 @@ private fun StreakWidget(type: WidgetType.Streak) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(20.dp), // More padding for breathing room
+            .padding(16.dp), // Reduced padding for compact card
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp) // Tighter vertical spacing
     ) {
-        // Solid orange circular progress arc with filled flame icon
+        // Dark circular base ring with four separate orange segments
         Box(
-            modifier = Modifier.size(100.dp), // Larger circle
+            modifier = Modifier.size(80.dp), // Smaller circle
             contentAlignment = Alignment.Center
         ) {
-            // Background ring (full circle, very light/soft color)
+            // Dark base ring (full circle)
             CircularProgressIndicator(
-                progress = { 1f }, // Full circle for background
-                modifier = Modifier.size(100.dp),
-                color = Color(0xFFFFE0B2).copy(alpha = 0.3f), // Very light orange/soft background
-                strokeWidth = 10.dp
+                progress = { 1f }, // Full circle for dark base
+                modifier = Modifier.size(80.dp),
+                color = Color(0xFF2A2A2A), // Dark grey base ring
+                strokeWidth = 8.dp
             )
-            // Foreground progress arc (solid orange, no gaps)
-            CircularProgressIndicator(
-                progress = { type.currentStreak.toFloat() / type.targetStreak },
-                modifier = Modifier.size(100.dp),
-                color = StatisticsColors.Orange, // Solid orange segment
-                strokeWidth = 10.dp,
-                trackColor = Color.Transparent // No track, just the progress arc
-            )
-            // Filled flame icon - yellow/orange gradient effect
+            
+            // Four separate orange segments using Canvas
+            androidx.compose.foundation.Canvas(
+                modifier = Modifier.size(80.dp)
+            ) {
+                val strokeWidth = 8.dp.toPx()
+                val radius = size.minDimension / 2 - strokeWidth / 2
+                val center = Offset(size.width / 2, size.height / 2)
+                
+                val segmentCount = 4
+                val segmentAngle = 60f // Each segment is 60 degrees
+                val gapAngle = 30f // Gap between segments is 30 degrees
+                val totalAngle = segmentAngle + gapAngle // 90 degrees per segment+gap
+                
+                val progress = type.currentStreak.toFloat() / type.targetStreak
+                val filledSegments = (progress * segmentCount).toInt()
+                val partialSegmentProgress = (progress * segmentCount) - filledSegments
+                
+                for (i in 0 until segmentCount) {
+                    val startAngle = -90f + (i * totalAngle) // Start from top
+                    if (i < filledSegments) {
+                        // Fully filled segment
+                        drawArc(
+                            color = StatisticsColors.Orange, // Orange
+                            startAngle = startAngle,
+                            sweepAngle = segmentAngle,
+                            useCenter = false,
+                            topLeft = Offset(center.x - radius, center.y - radius),
+                            size = Size(radius * 2, radius * 2),
+                            style = Stroke(width = strokeWidth, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                        )
+                    } else if (i == filledSegments && partialSegmentProgress > 0f) {
+                        // Partially filled segment
+                        drawArc(
+                            color = StatisticsColors.Orange, // Orange
+                            startAngle = startAngle,
+                            sweepAngle = segmentAngle * partialSegmentProgress,
+                            useCenter = false,
+                            topLeft = Offset(center.x - radius, center.y - radius),
+                            size = Size(radius * 2, radius * 2),
+                            style = Stroke(width = strokeWidth, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                        )
+                    }
+                }
+            }
+            
+            // Simple orange outline flame (not filled)
+            // Using a simple representation - can be replaced with proper outline icon
             Text(
                 text = "🔥",
-                fontSize = 40.sp // Larger filled flame
+                fontSize = 32.sp,
+                color = StatisticsColors.Orange // Solid orange color
             )
         }
         
-        // Number: 12 (bold, dark grey, centered)
+        // Number: 12 (bold, white, centered)
         Text(
             text = "${type.currentStreak}",
             style = MaterialTheme.typography.displayMedium.copy(
-                fontSize = 36.sp,
+                fontSize = 32.sp,
                 fontWeight = FontWeight.Bold
             ),
-            color = Color(0xFF282828) // Dark grey
+            color = Color.White // White
         )
         
-        // Label: "Day Streak" (medium grey, centered)
+        // Label: "Day Streak" (light grey, centered, slightly smaller)
         Text(
             text = "Day Streak",
             style = MaterialTheme.typography.bodyMedium.copy(
-                fontSize = 14.sp,
+                fontSize = 12.sp, // Slightly smaller
                 fontWeight = FontWeight.Normal
             ),
-            color = Color(0xFF8A8A8A) // Medium grey
+            color = Color(0xFFB0B0B0) // Light grey
         )
     }
 }

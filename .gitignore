@@ -99,3 +99,5 @@ lint-baseline.xml
 app/google-services.json
 crashlytics-build.properties
 fabric.properties
+
+.idea

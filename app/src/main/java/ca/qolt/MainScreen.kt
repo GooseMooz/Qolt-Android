@@ -62,7 +62,7 @@ fun MainScreen(
                 when (selectedTab) {
                     TabItem.HOME -> HomeScreen()
                     TabItem.BLOCKS -> PresetsScreen()
-                    TabItem.STATS -> StatisticsScreen()
+                    TabItem.STATS -> ca.qolt.ui.statistics.StatisticsScreen()
                     TabItem.PROFILE -> ProfileScreen(onLogout = onLogout)
                 }
             }

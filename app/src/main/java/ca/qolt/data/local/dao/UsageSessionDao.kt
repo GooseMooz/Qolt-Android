@@ -19,6 +19,9 @@ interface UsageSessionDao {
     @Query("SELECT * FROM usage_sessions WHERE endTime IS NULL LIMIT 1")
     suspend fun getActiveSession(): UsageSessionEntity?
 
+    @Query("SELECT * FROM usage_sessions WHERE id = :sessionId LIMIT 1")
+    suspend fun getSessionById(sessionId: Long): UsageSessionEntity?
+
     @Insert
     suspend fun insertSession(session: UsageSessionEntity): Long
 
@@ -27,6 +30,14 @@ interface UsageSessionDao {
 
     @Query("SELECT SUM(durationMs) FROM usage_sessions WHERE startTime >= :startTime")
     suspend fun getTotalDurationSince(startTime: Long): Long?
+
+    @Query("""
+        SELECT SUM(durationMs) FROM usage_sessions
+        WHERE startTime >= :dayStart
+        AND startTime < :dayEnd
+        AND endTime IS NOT NULL
+    """)
+    suspend fun getTotalDurationForDay(dayStart: Long, dayEnd: Long): Long?
 
     @Query("DELETE FROM usage_sessions")
     suspend fun deleteAllSessions()

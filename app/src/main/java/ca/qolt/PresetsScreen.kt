@@ -44,26 +44,25 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.createBitmap
 import ca.qolt.data.local.entity.PresetEntity
+import ca.qolt.model.InstalledApp
 import java.util.UUID
-
-data class InstalledApp(
-    val packageName: String,
-    val appName: String,
-    val icon: Drawable
-)
 
 private fun loadInstalledApps(context: Context): List<InstalledApp> {
     val pm = context.packageManager
+    val ownPackageName = context.packageName // Get Qolt's package name
 
     return pm.getInstalledApplications(PackageManager.GET_META_DATA)
         .filter { appInfo ->
-            pm.getLaunchIntentForPackage(appInfo.packageName) != null
+            // Exclude Qolt app itself and only include apps with launch intent
+            pm.getLaunchIntentForPackage(appInfo.packageName) != null &&
+            appInfo.packageName != ownPackageName
         }
         .map { appInfo ->
             InstalledApp(
                 packageName = appInfo.packageName,
                 appName = pm.getApplicationLabel(appInfo).toString(),
-                icon = pm.getApplicationIcon(appInfo)
+                icon = pm.getApplicationIcon(appInfo),
+                category = appInfo.category
             )
         }
         .sortedBy { it.appName.lowercase() }

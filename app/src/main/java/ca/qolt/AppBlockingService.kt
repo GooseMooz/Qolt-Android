@@ -6,10 +6,21 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import ca.qolt.data.local.SessionManager
+import ca.qolt.data.repository.UsageSessionRepository
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import timber.log.Timber
+import javax.inject.Inject
 
+@AndroidEntryPoint
 class AppBlockingService : Service() {
+
+    @Inject
+    lateinit var usageSessionRepository: UsageSessionRepository
+
+    @Inject
+    lateinit var sessionManager: SessionManager
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var blockedApps: Set<String> = emptySet()
     private var monitoringJob: Job? = null
@@ -28,18 +39,58 @@ class AppBlockingService : Service() {
         super.onCreate()
         createNotificationChannel()
         blockingOverlay = BlockingOverlay(this)
+
+        // Close any orphaned sessions from previous crashes
+        serviceScope.launch {
+            usageSessionRepository.closeAnyOrphanedSessions()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val apps = intent?.getStringArrayListExtra("blocked_apps")?.toSet() ?: emptySet()
-        blockedApps = apps
+        // Try to get apps from intent first (normal startup)
+        val appsFromIntent = intent?.getStringArrayListExtra("blocked_apps")?.toSet()
 
-        Timber.tag(TAG).d("Service started. Monitoring ${blockedApps.size} apps: $blockedApps")
+        // If intent is null or empty, restore from SharedPreferences (service restart)
+        blockedApps = if (!appsFromIntent.isNullOrEmpty()) {
+            Timber.tag(TAG).d("Service started with intent: ${appsFromIntent.size} apps")
+            appsFromIntent
+        } else {
+            val restored = AppBlockingManager.getBlockedApps(this)
+            Timber.tag(TAG).d("Service restarted - restored ${restored.size} apps from preferences")
+            restored
+        }
+
+        // Verify we should still be running
+        if (!AppBlockingManager.isBlockingActive(this)) {
+            Timber.tag(TAG).w("Service started but blocking not active - stopping")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // If no apps to block, stop the service
+        if (blockedApps.isEmpty()) {
+            Timber.tag(TAG).w("No apps to block - stopping service")
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         val notification = createNotification()
         startForeground(NOTIFICATION_ID, notification)
 
         startMonitoring()
+
+        // Start or continue tracking session
+        serviceScope.launch {
+            val activeSession = usageSessionRepository.getActiveSession()
+            if (activeSession == null) {
+                val sessionId = usageSessionRepository.startSession(blockedApps.size)
+                sessionManager.saveCurrentSessionId(sessionId)
+                Timber.tag(TAG).d("Started new session: $sessionId")
+            } else {
+                Timber.tag(TAG).d("Continuing existing session: ${activeSession.id}")
+                sessionManager.saveCurrentSessionId(activeSession.id)
+            }
+        }
 
         return START_STICKY
     }
@@ -70,7 +121,7 @@ class AppBlockingService : Service() {
 
             while (events.hasNextEvent()) {
                 events.getNextEvent(currentEvent)
-                if (currentEvent.eventType == android.app.usage.UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                if (currentEvent.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED) {
                     foregroundPackage = currentEvent.packageName
                 }
             }
@@ -108,6 +159,9 @@ class AppBlockingService : Service() {
                 lastBlockedApp = null
                 lastBlockTime = 0
             }
+
+            // Update last check timestamp for orphaned session recovery
+            sessionManager.saveLastServiceCheckTime(currentTime)
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error checking foreground app")
         }
@@ -162,10 +216,20 @@ class AppBlockingService : Service() {
     }
 
     override fun onDestroy() {
-        monitoringJob?.cancel()
-        serviceScope.cancel()
-        blockingOverlay?.dismiss()
-        blockingOverlay = null
+        // End current session before stopping service
+        serviceScope.launch {
+            val sessionId = sessionManager.getCurrentSessionId()
+            if (sessionId != null) {
+                usageSessionRepository.endSession(sessionId)
+                sessionManager.clearCurrentSessionId()
+                Timber.tag(TAG).d("Ended session: $sessionId")
+            }
+        }.invokeOnCompletion {
+            monitoringJob?.cancel()
+            serviceScope.cancel()
+            blockingOverlay?.dismiss()
+            blockingOverlay = null
+        }
         super.onDestroy()
     }
 

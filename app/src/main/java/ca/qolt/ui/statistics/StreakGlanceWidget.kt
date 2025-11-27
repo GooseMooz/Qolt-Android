@@ -22,6 +22,20 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import ca.qolt.R
+import ca.qolt.data.repository.UsageSessionRepository
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
+import androidx.glance.LocalContext
+import androidx.compose.ui.graphics.Color
+
+
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface StreakWidgetEntryPoint {
+    fun usageSessionRepository(): UsageSessionRepository
+}
 
 class StreakWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = StreakGlanceWidget()
@@ -30,9 +44,23 @@ class StreakWidgetReceiver : GlanceAppWidgetReceiver() {
 class StreakGlanceWidget : GlanceAppWidget() {
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
+        // Use Hilt EntryPoint to inject repository
+        val entryPoint = EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            StreakWidgetEntryPoint::class.java
+        )
+        val repository = entryPoint.usageSessionRepository()
+
+        // Calculate real streak
+        val streak = try {
+            repository.calculateStreak()
+        } catch (e: Exception) {
+            0 // Default to 0 if calculation fails
+        }
+
         provideContent {
             StreakGlanceContent(
-                streakDays = 12
+                streakDays = streak
             )
         }
     }
@@ -42,11 +70,12 @@ class StreakGlanceWidget : GlanceAppWidget() {
 private fun StreakGlanceContent(
     streakDays: Int
 ) {
+    val context = LocalContext.current
+
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
-            .background(ColorProvider(R.color.streak_background)) // Dark background
-            .cornerRadius(16.dp)
+            .background(ColorProvider(Color(context.getColor(R.color.streak_background))))            .cornerRadius(16.dp)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalAlignment = Alignment.CenterHorizontally
@@ -65,7 +94,7 @@ private fun StreakGlanceContent(
         Text(
             text = streakDays.toString(),
             style = TextStyle(
-                color = ColorProvider(R.color.white),
+                color = ColorProvider(Color.White),
                 fontSize = 36.sp,
                 fontWeight = FontWeight.Medium
             )
@@ -77,7 +106,7 @@ private fun StreakGlanceContent(
         Text(
             text = "Day Streak",
             style = TextStyle(
-                color = ColorProvider(R.color.white_opacity_60), // Dimmed text
+                color = ColorProvider(Color(context.getColor(R.color.white_opacity_60))),
                 fontSize = 14.sp
             )
         )

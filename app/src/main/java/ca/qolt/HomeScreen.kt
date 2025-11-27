@@ -8,60 +8,127 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
-import android.nfc.NdefMessage
 import android.nfc.NdefRecord
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.Ndef
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.widget.Toast
-import kotlinx.coroutines.delay
-import java.nio.charset.Charset
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.BatteryAlert
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Nfc
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.FloatingActionButtonDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.createBitmap
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.systemBars
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.hilt.navigation.compose.hiltViewModel
+import ca.qolt.model.InstalledApp
+import ca.qolt.ui.theme.Orange
+import ca.qolt.ui.theme.SuccessGreen
+import ca.qolt.ui.theme.SurfaceElevated
+import ca.qolt.util.BatteryOptimizationHelper
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.nio.charset.Charset
+import kotlin.math.min
+import androidx.core.content.edit
 
 
 private fun loadInstalledApps(context: Context): List<InstalledApp> {
     val pm = context.packageManager
+    val ownPackageName = context.packageName
+
     return pm.getInstalledApplications(PackageManager.GET_META_DATA)
         .filter { appInfo ->
-            pm.getLaunchIntentForPackage(appInfo.packageName) != null
+            // Exclude Qolt app itself and only include apps with launch intent
+            pm.getLaunchIntentForPackage(appInfo.packageName) != null &&
+            appInfo.packageName != ownPackageName
         }
         .map { appInfo ->
             InstalledApp(
                 packageName = appInfo.packageName,
                 appName = pm.getApplicationLabel(appInfo).toString(),
-                icon = pm.getApplicationIcon(appInfo)
+                icon = pm.getApplicationIcon(appInfo),
+                category = appInfo.category
             )
         }
         .sortedBy { it.appName.lowercase() }
@@ -140,7 +207,7 @@ private fun parseTextRecord(record: NdefRecord): String? {
             Charset.forName("UTF-8")
         )
         text
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         null
     }
 }
@@ -159,50 +226,137 @@ private fun parseUriRecord(record: NdefRecord): String? {
         )
 
         val prefixIndex = payload[0].toInt() and 0xFF
-        if (prefixIndex >= 0 && prefixIndex < uriPrefixes.size) {
+        if (prefixIndex < uriPrefixes.size) {
             val prefix = uriPrefixes[prefixIndex]
             val uri = String(payload, 1, payload.size - 1, Charset.forName("UTF-8"))
             prefix + uri
         } else {
             null
         }
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         null
     }
 }
 
 @Composable
-fun HomeScreen() {
+fun HomeScreen(
+    viewModel: ca.qolt.ui.home.HomeViewModel = hiltViewModel()
+) {
     val context = LocalContext.current
     val activity = context as? Activity
-    val orange = Color(0xFFFF6A1A)
+    val scope = rememberCoroutineScope()
+
+    val vibrator = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+            vibratorManager?.defaultVibrator
+        } else {
+            androidx.core.content.ContextCompat.getSystemService(context, Vibrator::class.java)        }
+    }
 
     var isNfcReading by remember { mutableStateOf(false) }
     var showScanningDialog by remember { mutableStateOf(false) }
-    var emergencyUsedToday by remember { mutableStateOf(false) }
-    var currentStreak by remember { mutableStateOf(7) }
-    val selectedPreset = "Study Focus"
-    val selectedPresetEmoji = "📖"
+
+    val prefs = remember { context.getSharedPreferences("qolt_prefs", Context.MODE_PRIVATE) }
+    val lastEmergencyDate = prefs.getString("last_emergency_date", "") ?: ""
+    val currentDate = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+        .format(java.util.Date())
+    var emergencyUsedToday by remember {
+        mutableStateOf(lastEmergencyDate == currentDate)
+    }
+
+    val currentStreak by viewModel.currentStreak.collectAsState()
 
     var showAppSelector by remember { mutableStateOf(false) }
     var allApps by remember { mutableStateOf<List<InstalledApp>>(emptyList()) }
     var selectedApps by remember { mutableStateOf(setOf<String>()) }
 
-    var lastScannedTag by remember { mutableStateOf<String?>(null) }
     var showScanSuccess by remember { mutableStateOf(false) }
     var lastCheckedAction by remember { mutableStateOf<String?>(null) }
     var appsBlocked by remember { mutableStateOf(AppBlockingManager.isBlockingActive(context)) }
+
+    var holdProgress by remember { mutableStateOf(0f) }
+    var isHolding by remember { mutableStateOf(false) }
+
+    var isVisible by remember { mutableStateOf(false) }
+    var emergencyShake by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         val savedApps = AppBlockingManager.getBlockedApps(context)
         if (savedApps.isNotEmpty()) {
             selectedApps = savedApps
         }
+        isVisible = true
     }
 
     LaunchedEffect(showAppSelector) {
         if (showAppSelector && allApps.isEmpty()) {
             allApps = loadInstalledApps(context)
+        }
+    }
+
+    LaunchedEffect(isHolding) {
+        if (isHolding && !appsBlocked && !showScanSuccess && !showScanningDialog) {
+
+            delay(500)
+            if (!isHolding) {
+                holdProgress = 0f
+                return@LaunchedEffect
+            }
+
+            val startTime = System.currentTimeMillis()
+            while (isHolding && holdProgress < 1f) {
+                val elapsed = System.currentTimeMillis() - startTime
+                holdProgress = min((elapsed / 3000f), 1f)
+
+                if (holdProgress >= 1f) {
+                    if (selectedApps.isNotEmpty()) {
+                        if (!AppBlockingManager.hasUsageStatsPermission(context)) {
+                            Toast.makeText(
+                                context,
+                                "Please grant Usage Access permission",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            AppBlockingManager.requestUsageStatsPermission(context)
+                        } else if (!AppBlockingManager.hasOverlayPermission(context)) {
+                            Toast.makeText(
+                                context,
+                                "Please grant Display Over Other Apps permission",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            AppBlockingManager.requestOverlayPermission(context)
+                        } else {
+                            AppBlockingManager.saveBlockedApps(context, selectedApps)
+                            AppBlockingManager.blockApps(context, selectedApps)
+                            appsBlocked = true
+                            showScanSuccess = true
+
+                            viewModel.refreshStreak()
+
+                            vibrator?.vibrate(
+                                VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE)
+                            )
+
+                            Toast.makeText(
+                                context,
+                                "${selectedApps.size} Apps Blocked",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    } else {
+                        Toast.makeText(
+                            context,
+                            "No apps selected to block",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    holdProgress = 0f
+                    isHolding = false
+                }
+                delay(16)
+            }
+        } else {
+            holdProgress = 0f
         }
     }
 
@@ -218,12 +372,16 @@ fun HomeScreen() {
                         action == NfcAdapter.ACTION_NDEF_DISCOVERED ||
                         action == NfcAdapter.ACTION_TECH_DISCOVERED) {
 
-                        val tag: Tag? = intent.getParcelableExtra(NfcAdapter.EXTRA_TAG)
+                        val tag: Tag? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            intent.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra(NfcAdapter.EXTRA_TAG)
+                        }
                         if (tag != null) {
                             val textContent = readNdefMessage(tag)
 
                             if (textContent != null && textContent.contains("KillSwitch", ignoreCase = true)) {
-                                lastScannedTag = textContent
                                 showScanSuccess = true
                                 showScanningDialog = false
                                 isNfcReading = false
@@ -248,12 +406,14 @@ fun HomeScreen() {
                                         }
                                         else {
                                             AppBlockingManager.saveBlockedApps(context, selectedApps)
-
                                             AppBlockingManager.blockApps(context, selectedApps)
                                             appsBlocked = true
+
+                                            viewModel.refreshStreak()
+
                                             Toast.makeText(
                                                 context,
-                                                "✅ ${selectedApps.size} Apps Blocked!",
+                                                "${selectedApps.size} Apps Blocked",
                                                 Toast.LENGTH_LONG
                                             ).show()
                                         }
@@ -265,22 +425,25 @@ fun HomeScreen() {
                                         ).show()
                                     }
                                 } else {
-                                    AppBlockingManager.unblockApps(context)
-                                    appsBlocked = false
+                                    scope.launch {
+                                        viewModel.endSession()
+                                        AppBlockingManager.unblockApps(context)
+                                        appsBlocked = false
+                                    }
                                     Toast.makeText(
                                         context,
-                                        "✅ Apps Unblocked!",
+                                        "Apps Unblocked",
                                         Toast.LENGTH_LONG
                                     ).show()
                                 }
                             } else if (textContent != null) {
                                 showScanningDialog = false
                                 isNfcReading = false
-                                Toast.makeText(context, "❌ Wrong tag!", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, "Wrong tag", Toast.LENGTH_LONG).show()
                             } else {
                                 showScanningDialog = false
                                 isNfcReading = false
-                                Toast.makeText(context, "❌ Wrong tag!", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, "Wrong tag", Toast.LENGTH_LONG).show()
                             }
 
                             activity.intent.action = ""
@@ -295,8 +458,15 @@ fun HomeScreen() {
 
     LaunchedEffect(showScanSuccess) {
         if (showScanSuccess) {
-            delay(3000)
+            delay(2000)
             showScanSuccess = false
+        }
+    }
+
+    LaunchedEffect(emergencyShake) {
+        if (emergencyShake) {
+            delay(500)
+            emergencyShake = false
         }
     }
 
@@ -328,7 +498,7 @@ fun HomeScreen() {
         } else if (!isNfcReading && activity != null && nfcAdapter != null) {
             try {
                 nfcAdapter.disableForegroundDispatch(activity)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
             }
         }
     }
@@ -338,16 +508,65 @@ fun HomeScreen() {
             if (activity != null && nfcAdapter != null) {
                 try {
                     nfcAdapter.disableForegroundDispatch(activity)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                 }
             }
         }
     }
 
+    val topBarOffset by animateDpAsState(
+        targetValue = if (isVisible) 0.dp else (-50).dp,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "topBarOffset"
+    )
+
+    val fabScale by animateFloatAsState(
+        targetValue = if (isVisible) 1f else 0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "fabScale"
+    )
+
+    val bottomBarOffset by animateDpAsState(
+        targetValue = if (isVisible) 0.dp else 100.dp,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "bottomBarOffset"
+    )
+
+    val fabColor by animateColorAsState(
+        targetValue = when {
+            showScanSuccess -> SuccessGreen
+            appsBlocked -> MaterialTheme.colorScheme.errorContainer
+            else -> MaterialTheme.colorScheme.primary
+        },
+        animationSpec = spring<Color>(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "fabColor"
+    )
+
+    val emergencyRotation by animateFloatAsState(
+        targetValue = if (emergencyShake) 10f else 0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioHighBouncy,
+            stiffness = Spring.StiffnessHigh
+        ),
+        label = "emergencyRotation"
+    )
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF1C1C1E))
+            .background(MaterialTheme.colorScheme.background)
             .windowInsetsPadding(WindowInsets.systemBars)
     ) {
         Column(
@@ -356,123 +575,438 @@ fun HomeScreen() {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .offset(y = topBarOffset)
                     .padding(horizontal = 24.dp, vertical = 32.dp)
                     .padding(top = 16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier
-                        .background(orange.copy(alpha = 0.15f), RoundedCornerShape(20.dp))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                // Streak Badge
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(20.dp),
+                    tonalElevation = 2.dp
                 ) {
-                    Text(
-                        text = "🔥",
-                        fontSize = 20.sp
-                    )
-                    Text(
-                        text = "$currentStreak",
-                        color = orange,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LocalFireDepartment,
+                            contentDescription = "Streak",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Text(
+                            text = "$currentStreak",
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
 
-                Box(
-                    modifier = Modifier
-                        .background(
-                            if (emergencyUsedToday) Color.Gray.copy(alpha = 0.15f) else Color.Red.copy(alpha = 0.15f),
-                            RoundedCornerShape(20.dp)
-                        )
-                        .clickable(enabled = !emergencyUsedToday) {
-                            if (!emergencyUsedToday) {
-                                emergencyUsedToday = true
-                                Toast.makeText(context, "Emergency unlock activated! Available again tomorrow.", Toast.LENGTH_LONG).show()
-                            } else {
-                                Toast.makeText(context, "Emergency unlock already used today", Toast.LENGTH_SHORT).show()
+                if (appsBlocked) {
+                    Surface(
+                        color = if (emergencyUsedToday)
+                            MaterialTheme.colorScheme.surfaceVariant
+                        else
+                            MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(20.dp),
+                        tonalElevation = if (emergencyUsedToday) 0.dp else 2.dp,
+                        modifier = Modifier
+                            .rotate(emergencyRotation)
+                            .clickable(enabled = !emergencyUsedToday) @androidx.annotation.RequiresPermission(
+                                android.Manifest.permission.VIBRATE
+                            ) {
+                                if (!emergencyUsedToday) {
+                                    scope.launch @androidx.annotation.RequiresPermission(android.Manifest.permission.VIBRATE) {
+                                        viewModel.endSession()
+
+                                        AppBlockingManager.unblockApps(context)
+                                        appsBlocked = false
+                                        emergencyUsedToday = true
+
+                                        prefs.edit {
+                                            putString("last_emergency_date", currentDate)
+                                        }
+
+                                        vibrator?.vibrate(
+                                            VibrationEffect.createWaveform(
+                                                longArrayOf(0, 100, 50, 100),
+                                                -1
+                                            )
+                                        )
+
+                                        Toast.makeText(
+                                            context,
+                                            "Emergency unlock activated! Available again tomorrow.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                } else {
+                                    emergencyShake = true
+
+                                    // Error haptic
+                                    vibrator?.vibrate(
+                                        VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE)
+                                    )
+
+                                    Toast.makeText(
+                                        context,
+                                        "Emergency unlock already used today",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Warning,
+                                contentDescription = "Emergency Unblock",
+                                tint = if (emergencyUsedToday)
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                else
+                                    MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(24.dp)
+                            )
                         }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        text = "🚨",
-                        fontSize = 20.sp
-                    )
+                    }
                 }
             }
 
+            // Center - Main FAB
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
                 contentAlignment = Alignment.Center
             ) {
-                FloatingActionButton(
-                    onClick = {
-                        if (!showScanSuccess && !showScanningDialog) {
-                            if (nfcAdapter == null) {
-                                Toast.makeText(context, "NFC not available on this device", Toast.LENGTH_LONG).show()
-                            } else if (!nfcAdapter.isEnabled) {
-                                Toast.makeText(context, "Please enable NFC in Settings", Toast.LENGTH_LONG).show()
-                            } else {
-                                showScanningDialog = true
-                                isNfcReading = true
+                Box(
+                    modifier = Modifier
+                        .scale(fabScale)
+                        .size(200.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // Enhanced progress rings
+                    if (holdProgress > 0f) {
+                        // Pulsing outer ring animation
+                        val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+                        val pulseScale by infiniteTransition.animateFloat(
+                            initialValue = 1f,
+                            targetValue = 1.15f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(800, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "pulseScale"
+                        )
+
+                        val pulseAlpha by infiniteTransition.animateFloat(
+                            initialValue = 0.4f,
+                            targetValue = 0.1f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(800, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "pulseAlpha"
+                        )
+
+                        androidx.compose.foundation.Canvas(
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            val centerX = size.width / 2
+                            val centerY = size.height / 2
+                            val baseRadius = size.minDimension / 2
+
+                            // Outer pulsing ring
+                            drawCircle(
+                                color = Orange.copy(alpha = pulseAlpha),
+                                radius = baseRadius * pulseScale,
+                                center = Offset(centerX, centerY),
+                                style = Stroke(width = 3.dp.toPx())
+                            )
+
+                            // Background track (subtle)
+                            val trackStrokeWidth = 4.dp.toPx()
+                            val trackRadius = baseRadius - 12.dp.toPx()
+                            drawArc(
+                                color = Orange.copy(alpha = 0.15f),
+                                startAngle = -90f,
+                                sweepAngle = 360f,
+                                useCenter = false,
+                                topLeft = Offset(
+                                    centerX - trackRadius,
+                                    centerY - trackRadius
+                                ),
+                                size = Size(trackRadius * 2, trackRadius * 2),
+                                style = Stroke(
+                                    width = trackStrokeWidth,
+                                    cap = StrokeCap.Round
+                                )
+                            )
+
+                            // Main progress arc with gradient-like effect (multiple layers)
+                            val mainStrokeWidth = 8.dp.toPx()
+                            val mainRadius = baseRadius - 12.dp.toPx()
+
+                            // Glow layer (slightly larger, more transparent)
+                            drawArc(
+                                color = Orange.copy(alpha = 0.3f),
+                                startAngle = -90f,
+                                sweepAngle = 360f * holdProgress,
+                                useCenter = false,
+                                topLeft = Offset(
+                                    centerX - mainRadius - 2.dp.toPx(),
+                                    centerY - mainRadius - 2.dp.toPx()
+                                ),
+                                size = Size((mainRadius + 2.dp.toPx()) * 2, (mainRadius + 2.dp.toPx()) * 2),
+                                style = Stroke(
+                                    width = mainStrokeWidth + 4.dp.toPx(),
+                                    cap = StrokeCap.Round
+                                )
+                            )
+
+                            // Main solid arc
+                            drawArc(
+                                color = Orange,
+                                startAngle = -90f,
+                                sweepAngle = 360f * holdProgress,
+                                useCenter = false,
+                                topLeft = Offset(
+                                    centerX - mainRadius,
+                                    centerY - mainRadius
+                                ),
+                                size = Size(mainRadius * 2, mainRadius * 2),
+                                style = Stroke(
+                                    width = mainStrokeWidth,
+                                    cap = StrokeCap.Round
+                                )
+                            )
+
+                            // Leading edge glow dot
+                            if (holdProgress > 0.05f) {
+                                val angle = (-90f + 360f * holdProgress) * (kotlin.math.PI / 180f)
+                                val dotX = centerX + mainRadius * kotlin.math.cos(angle).toFloat()
+                                val dotY = centerY + mainRadius * kotlin.math.sin(angle).toFloat()
+
+                                // Outer glow
+                                drawCircle(
+                                    color = Orange.copy(alpha = 0.3f),
+                                    radius = 12.dp.toPx(),
+                                    center = Offset(dotX, dotY)
+                                )
+
+                                // Inner bright dot
+                                drawCircle(
+                                    color = Orange,
+                                    radius = 6.dp.toPx(),
+                                    center = Offset(dotX, dotY)
+                                )
+
+                                // Center highlight
+                                drawCircle(
+                                    color = Color.White,
+                                    radius = 3.dp.toPx(),
+                                    center = Offset(dotX, dotY)
+                                )
                             }
                         }
-                    },
-                    modifier = Modifier.size(180.dp),
-                    shape = CircleShape,
-                    containerColor = if (showScanSuccess) Color(0xFF4CAF50) else if (appsBlocked) Color.Red.copy(alpha = 0.8f) else orange,
-                    elevation = FloatingActionButtonDefaults.elevation(
-                        defaultElevation = 8.dp,
-                        pressedElevation = 12.dp
+                    }
+
+                    // Main FAB
+                    val icon: ImageVector = when {
+                        showScanSuccess -> Icons.Default.Check
+                        appsBlocked -> Icons.Default.Lock
+                        else -> Icons.Default.LockOpen
+                    }
+
+                    val iconRotation by animateFloatAsState(
+                        targetValue = if (showScanSuccess) 360f else 0f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        ),
+                        label = "iconRotation"
                     )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PowerSettingsNew,
-                        contentDescription = if (appsBlocked) "Unlock apps" else "Lock apps",
-                        tint = Color.White,
-                        modifier = Modifier.size(80.dp)
-                    )
+
+                    Surface(
+                        modifier = Modifier
+                            .size(180.dp)
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = {
+                                        // Short tap - show NFC dialog
+                                        if (!showScanSuccess && !showScanningDialog) {
+                                            if (nfcAdapter == null) {
+                                                Toast
+                                                    .makeText(
+                                                        context,
+                                                        "NFC not available on this device",
+                                                        Toast.LENGTH_LONG
+                                                    )
+                                                    .show()
+                                            } else if (!nfcAdapter.isEnabled) {
+                                                Toast
+                                                    .makeText(
+                                                        context,
+                                                        "Please enable NFC in Settings",
+                                                        Toast.LENGTH_LONG
+                                                    )
+                                                    .show()
+                                            } else {
+                                                showScanningDialog = true
+                                                isNfcReading = true
+                                            }
+                                        }
+                                    },
+                                    onPress = @androidx.annotation.RequiresPermission(android.Manifest.permission.VIBRATE) {
+                                        // Long press - hold to block
+                                        if (!appsBlocked && !showScanSuccess && !showScanningDialog) {
+                                            isHolding = true
+
+                                            // Start haptic
+                                            vibrator?.vibrate(
+                                                VibrationEffect.createOneShot(
+                                                    50,
+                                                    VibrationEffect.DEFAULT_AMPLITUDE
+                                                )
+                                            )
+                                        }
+
+                                        tryAwaitRelease()
+                                        isHolding = false
+                                    }
+                                )
+                            },
+                        shape = CircleShape,
+                        color = fabColor,
+                        shadowElevation = 8.dp,
+                        tonalElevation = 8.dp
+                    ) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = if (appsBlocked) "Unlock apps" else "Lock apps",
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier
+                                    .size(80.dp)
+                                    .rotate(iconRotation)
+                            )
+                        }
+                    }
                 }
             }
 
-            Row(
+            if (appsBlocked &&
+                !BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)) {
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BatteryAlert,
+                            contentDescription = "Battery optimization warning",
+                            tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Improve Reliability",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                            Text(
+                                text = "Disable battery optimization for better app blocking",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
+                            )
+
+                            BatteryOptimizationHelper.getManufacturerInstructions()?.let { instructions ->
+                                Text(
+                                    text = instructions,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(top = 4.dp),
+                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
+                        TextButton(
+                            onClick = {
+                                BatteryOptimizationHelper.openBatteryOptimizationSettings(context)
+                            }
+                        ) {
+                            Text(
+                                "Settings",
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Bottom - App Selection Bar
+            Surface(
+                color = if (appsBlocked)
+                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+                else
+                    MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        if (appsBlocked) Color.Red.copy(alpha = 0.1f) else Color.White.copy(alpha = 0.05f)
-                    )
+                    .offset(y = bottomBarOffset)
                     .clickable(enabled = !appsBlocked) {
                         showAppSelector = true
                     }
-                    .padding(horizontal = 24.dp, vertical = 20.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
             ) {
-                if (appsBlocked) {
-                    Text(
-                        text = "🔒",
-                        fontSize = 24.sp
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 20.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (appsBlocked) Icons.Default.Lock else Icons.Default.Apps,
+                        contentDescription = null,
+                        tint = if (appsBlocked)
+                            MaterialTheme.colorScheme.error
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp)
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = "${selectedApps.size} Apps Locked",
-                        color = Color.Red,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                } else {
-                    Text(
-                        text = selectedPresetEmoji,
-                        fontSize = 24.sp
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = if (selectedApps.isEmpty()) "Select Apps to Block" else "${selectedApps.size} Apps Selected",
-                        color = Color.White,
+                        text = if (appsBlocked) {
+                            "${selectedApps.size} Apps Locked"
+                        } else {
+                            if (selectedApps.isEmpty()) "Select Apps to Block" else "${selectedApps.size} Apps Selected"
+                        },
+                        color = if (appsBlocked)
+                            MaterialTheme.colorScheme.error
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Medium
                     )
@@ -481,16 +1015,14 @@ fun HomeScreen() {
         }
     }
 
+    // App Selector Dialog
     if (showAppSelector) {
         AlertDialog(
             onDismissRequest = { showAppSelector = false },
             title = {
                 Text(
                     text = "Select Apps to Block",
-                    style = TextStyle(
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    style = MaterialTheme.typography.titleLarge
                 )
             },
             text = {
@@ -504,20 +1036,30 @@ fun HomeScreen() {
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = "Loading apps...",
-                                style = TextStyle(fontSize = 13.sp, color = Color.Gray)
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
                     } else {
                         LazyColumn(
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            items(allApps) { app ->
+                            itemsIndexed(allApps) { _, app ->
                                 val isChecked = app.packageName in selectedApps
+
+                                val itemAlpha by animateFloatAsState(
+                                    targetValue = 1f,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                                        stiffness = Spring.StiffnessLow
+                                    ),
+                                    label = "itemAlpha"
+                                )
+
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .alpha(itemAlpha)
                                         .padding(vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -526,8 +1068,8 @@ fun HomeScreen() {
                                         bitmap = iconBitmap,
                                         contentDescription = app.appName,
                                         modifier = Modifier
-                                            .height(32.dp)
-                                            .padding(end = 8.dp)
+                                            .size(40.dp)
+                                            .padding(end = 12.dp)
                                     )
 
                                     Column(
@@ -535,14 +1077,12 @@ fun HomeScreen() {
                                     ) {
                                         Text(
                                             text = app.appName,
-                                            style = TextStyle(fontSize = 14.sp)
+                                            style = MaterialTheme.typography.bodyLarge
                                         )
                                         Text(
                                             text = app.packageName,
-                                            style = TextStyle(
-                                                fontSize = 11.sp,
-                                                color = Color.Gray
-                                            )
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
 
@@ -563,7 +1103,7 @@ fun HomeScreen() {
                 }
             },
             confirmButton = {
-                TextButton(
+                FilledTonalButton(
                     onClick = {
                         AppBlockingManager.saveBlockedApps(context, selectedApps)
                         Toast.makeText(context, "${selectedApps.size} apps selected", Toast.LENGTH_SHORT).show()
@@ -590,11 +1130,7 @@ fun HomeScreen() {
             title = {
                 Text(
                     text = "Scanning for NFC Tag",
-                    style = TextStyle(
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
+                    style = MaterialTheme.typography.titleLarge
                 )
             },
             text = {
@@ -605,53 +1141,62 @@ fun HomeScreen() {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
-                    Box(
+                    // Pulsing NFC icon
+                    val pulseScale by rememberInfiniteTransition(label = "pulse").animateFloat(
+                        initialValue = 1f,
+                        targetValue = 1.1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(1000, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "pulseScale"
+                    )
+
+                    Surface(
                         modifier = Modifier
                             .size(120.dp)
-                            .background(orange.copy(alpha = 0.2f), CircleShape)
-                            .border(3.dp, orange, CircleShape),
-                        contentAlignment = Alignment.Center
+                            .scale(pulseScale),
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        tonalElevation = 4.dp,
+                        border = BorderStroke(3.dp, MaterialTheme.colorScheme.primary)
                     ) {
-                        Text(
-                            text = "📱",
-                            fontSize = 48.sp
-                        )
+                        Box(
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Nfc,
+                                contentDescription = "NFC",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(56.dp)
+                            )
+                        }
                     }
 
                     Text(
                         text = "Hold your phone near the NFC tag",
-                        style = TextStyle(
-                            fontSize = 16.sp,
-                            color = Color.White,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
 
                     Text(
                         text = "Looking for your tag...",
-                        style = TextStyle(
-                            fontSize = 14.sp,
-                            color = orange,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
+                        showScanningDialog = false
                         isNfcReading = false
-                    },
-                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
-                        contentColor = orange
-                    )
+                    }
                 ) {
-                    Text("Cancel", fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                    Text("Cancel")
                 }
             },
-            containerColor = Color(0xFF2C2C2E),
-            titleContentColor = Color.White,
-            textContentColor = Color.White
+            containerColor = SurfaceElevated
         )
     }
 }

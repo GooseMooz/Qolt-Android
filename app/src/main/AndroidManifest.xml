@@ -6,6 +6,9 @@
     <!-- NFC Permission -->
     <uses-permission android:name="android.permission.NFC" />
 
+    <!-- Haptic feedback -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <!-- Required for app usage statistics -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
@@ -17,7 +20,13 @@
     <!-- Internet for potential analytics/cloud sync (optional) -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
 
     <!-- For foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -29,6 +38,9 @@
 
     <!-- For displaying overlay over other apps (required to bypass BAL restrictions) -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- For restarting service after device reboot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Declare NFC feature requirement (optional - set required="false" if NFC is not mandatory) -->
     <uses-feature
@@ -118,6 +130,17 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="App blocking for productivity" />
         </service>
+
+        <!-- Boot and Update Receiver for App Blocking Service -->
+        <receiver
+            android:name=".AppBlockingRestartReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

@@ -97,6 +97,8 @@ dependencies {
     // Hilt
     implementation(libs.hilt.android)
     implementation(libs.androidx.compose.foundation.layout)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.compose.runtime)
     ksp(libs.hilt.android.compiler)
     implementation(libs.hilt.navigation.compose)
     implementation(libs.hilt.work)
@@ -124,6 +126,8 @@ dependencies {
     implementation(libs.timber)
 
     implementation("androidx.compose.foundation:foundation:1.6.0")
+    implementation("io.coil-kt:coil-compose:2.5.0")
+
 
     // Testing
     testImplementation(libs.junit)

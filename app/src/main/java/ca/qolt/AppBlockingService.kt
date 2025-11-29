@@ -24,9 +24,13 @@ class AppBlockingService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var blockedApps: Set<String> = emptySet()
     private var monitoringJob: Job? = null
+    private var timerJob: Job? = null
     private var lastBlockedApp: String? = null
     private var lastBlockTime: Long = 0
     private var blockingOverlay: BlockingOverlay? = null
+
+    private var timerStartTime: Long = 0L
+    private var blockTimerEnabled: Boolean = false
 
     companion object {
         private const val TAG = "AppBlockingService"
@@ -74,7 +78,14 @@ class AppBlockingService : Service() {
             return START_NOT_STICKY
         }
 
-        val notification = createNotification()
+        blockTimerEnabled = PreferencesManager.getBlockTimerEnabled(applicationContext)
+
+        if (blockTimerEnabled) {
+            timerStartTime = System.currentTimeMillis()
+        }
+
+        val initialTimerText = if (blockTimerEnabled) "00:00:00" else null
+        val notification = createNotification(initialTimerText)
         startForeground(NOTIFICATION_ID, notification)
 
         startMonitoring()
@@ -92,6 +103,10 @@ class AppBlockingService : Service() {
             }
         }
 
+        if (blockTimerEnabled) {
+            startTimerUpdates()
+        }
+
         return START_STICKY
     }
 
@@ -104,6 +119,29 @@ class AppBlockingService : Service() {
             }
         }
     }
+
+    private fun startTimerUpdates() {
+        timerJob?.cancel()
+        timerJob = serviceScope.launch {
+            while (isActive && blockTimerEnabled) {
+                val elapsedMillis = System.currentTimeMillis() - timerStartTime
+                val totalSeconds = (elapsedMillis / 1000).toInt()
+
+                val hours = totalSeconds / 3600
+                val minutes = (totalSeconds % 3600) / 60
+                val seconds = totalSeconds % 60
+
+                val timerText = String.format("%02d:%02d:%02d", hours, minutes, seconds)
+
+                val updatedNotification = createNotification(timerText)
+                val manager = getSystemService(NotificationManager::class.java)
+                manager.notify(NOTIFICATION_ID, updatedNotification)
+
+                delay(1000)
+            }
+        }
+    }
+
 
     private suspend fun checkAndBlockApps() {
         if (!AppBlockingManager.isBlockingActive(this)) {
@@ -137,7 +175,7 @@ class AppBlockingService : Service() {
                 Timber.tag(TAG).d("Blocked app detected: $foregroundPackage")
 
                 val shouldBlock = (foregroundPackage != lastBlockedApp) ||
-                                 (currentTime - lastBlockTime > BLOCK_COOLDOWN_MS)
+                        (currentTime - lastBlockTime > BLOCK_COOLDOWN_MS)
 
                 if (shouldBlock) {
                     lastBlockedApp = foregroundPackage
@@ -190,7 +228,7 @@ class AppBlockingService : Service() {
         notificationManager.createNotificationChannel(channel)
     }
 
-    private fun createNotification(): Notification {
+    private fun createNotification(timerText: String?): Notification {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -202,17 +240,32 @@ class AppBlockingService : Service() {
         val notificationText = if (blockedApps.isEmpty()) {
             "No apps are currently blocked"
         } else {
-            "${blockedApps.size} apps blocked: ${blockedApps.take(3).joinToString(", ") { getAppName(it) }}${if (blockedApps.size > 3) "..." else ""}"
+            "${blockedApps.size} apps blocked: " +
+                    blockedApps.take(3).joinToString(", ") { getAppName(it) } +
+                    if (blockedApps.size > 3) "..." else ""
         }
 
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+        val liveActivityEnabled = PreferencesManager.getLiveActivityEnabled(this)
+
+        val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Qolt App Blocking Active")
             .setContentText(notificationText)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
-            .build()
+            .setVisibility(
+                if (liveActivityEnabled)
+                    NotificationCompat.VISIBILITY_PUBLIC
+                else
+                    NotificationCompat.VISIBILITY_SECRET
+            )
+
+        if (timerText != null) {
+            builder.setSubText(timerText)
+        }
+
+        return builder.build()
     }
 
     override fun onDestroy() {
@@ -230,6 +283,11 @@ class AppBlockingService : Service() {
             blockingOverlay?.dismiss()
             blockingOverlay = null
         }
+        monitoringJob?.cancel()
+        timerJob?.cancel()
+        serviceScope.cancel()
+        blockingOverlay?.dismiss()
+        blockingOverlay = null
         super.onDestroy()
     }
 

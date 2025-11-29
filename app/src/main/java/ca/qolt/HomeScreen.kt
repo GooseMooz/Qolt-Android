@@ -264,6 +264,9 @@ fun HomeScreen(
     var emergencyUsedToday by remember {
         mutableStateOf(lastEmergencyDate == currentDate)
     }
+    var emergencyUnlockEnabled by remember {
+        mutableStateOf(PreferencesManager.getEmergencyUnlockEnabled(context))
+    }
 
     val currentStreak by viewModel.currentStreak.collectAsState()
 
@@ -617,7 +620,7 @@ fun HomeScreen(
                         tonalElevation = if (emergencyUsedToday) 0.dp else 2.dp,
                         modifier = Modifier
                             .rotate(emergencyRotation)
-                            .clickable(enabled = !emergencyUsedToday) @androidx.annotation.RequiresPermission(
+                            .clickable(enabled = !emergencyUsedToday && emergencyUnlockEnabled) @androidx.annotation.RequiresPermission(
                                 android.Manifest.permission.VIBRATE
                             ) {
                                 if (!emergencyUsedToday) {
